@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
+from excel_utils import save_workbook_safely
 from money_utils import decimal_to_number, round_one_decimal
 
 
@@ -243,6 +244,5 @@ def merge_yearly_workbooks(paths: Iterable[Path], output_path: Path) -> Path:
     summary.freeze_panes = "A2"
     combined.calculation.fullCalcOnLoad = True
     combined.calculation.forceFullCalc = True
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    combined.save(output_path)
+    save_workbook_safely(combined, output_path)
     return output_path

@@ -1,0 +1,2 @@
+# 仅打包时需要；程序运行依赖仍由 requirements.txt 管理。
+pyinstaller>=6.11,<7

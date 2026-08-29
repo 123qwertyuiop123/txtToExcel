@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
+from excel_utils import save_workbook_safely, set_safe_text
 from models import GameRecord
 from money_utils import decimal_to_number, round_one_decimal
 
@@ -161,7 +162,7 @@ def create_game_workbook(records_by_year: dict[int, list[GameRecord]], output_pa
         for row, record in enumerate(records, start=2):
             sheet.cell(row, 1, record.purchase_date)
             sheet.cell(row, 1).number_format = 'm"月"d"日"'
-            sheet.cell(row, 2, record.game)
+            set_safe_text(sheet.cell(row, 2), record.game)
             sheet.cell(row, 3, decimal_to_number(round_one_decimal(record.amount)))
             monthly_totals[record.purchase_date.month] += record.amount
             game_totals[record.game] = game_totals.get(record.game, Decimal("0")) + record.amount
@@ -177,7 +178,7 @@ def create_game_workbook(records_by_year: dict[int, list[GameRecord]], output_pa
         sheet.cell(14, 6).font = Font(bold=True)
 
         for row, (game, game_total) in enumerate(sorted(game_totals.items()), start=2):
-            sheet.cell(row, 8, game)
+            set_safe_text(sheet.cell(row, 8), game)
             sheet.cell(row, 9, decimal_to_number(round_one_decimal(game_total)))
         for column, width in {
             "A": 14, "B": 20, "C": 14, "D": 3, "E": 12,
@@ -198,8 +199,7 @@ def create_game_workbook(records_by_year: dict[int, list[GameRecord]], output_pa
     summary.freeze_panes = "A2"
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+    save_workbook_safely(workbook, output_path)
 
 
 def convert_game_txt_files(paths: Iterable[Path], output_path: Path) -> Path:

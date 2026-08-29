@@ -9,7 +9,10 @@ from year_merge import merge_yearly_workbooks, validate_yearly_workbooks
 
 
 def _file_snapshot(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:
-    """记录路径、修改时间和大小，防止检查通过后源文件又被修改。"""
+    """记录路径、修改时间和大小，防止检查通过后源文件又被意外修改。
+
+    这里用于普通桌面操作的一致性检查，不是防恶意篡改的数字签名或文件哈希。
+    """
     states: list[tuple[str, int, int]] = []
     for path in paths:
         stat = path.stat()
@@ -103,6 +106,7 @@ def launch_year_merge_gui(parent) -> None:
             _show_error_list(window, "年度文件检查未通过", f"发现 {len(errors)} 个问题：", errors)
             return
         output = Path(output_var.get().strip())
+        # 年度合并会替换同名输出，因此必须先获得用户明确确认。
         if output.exists() and not messagebox.askyesno("确认覆盖", f"文件已存在，是否覆盖？\n{output}", parent=window):
             return
         merge_button.state(["disabled"])
@@ -226,6 +230,7 @@ def launch_game_gui(parent) -> None:
             messagebox.showwarning("缺少输出位置", "请选择 Excel 保存位置。", parent=window)
             return
         output = Path(output_var.get().strip())
+        # 仅覆盖用户在保存框中明确选择的目标，不改动任何源 TXT。
         if output.exists() and not messagebox.askyesno("确认覆盖", f"文件已存在，是否覆盖？\n{output}", parent=window):
             return
         convert_button.state(["disabled"])
@@ -391,6 +396,7 @@ def launch_gui() -> int:
             messagebox.showwarning("缺少输出位置", "请选择 Excel 文件的保存位置。", parent=root)
             return
         output = Path(output_var.get().strip())
+        # 覆盖不可撤销；确认框是保护已有统计工作簿的最后一道防线。
         if output.exists() and not messagebox.askyesno("确认覆盖", f"文件已存在，是否覆盖？\n{output}", parent=root):
             status_var.set("已取消转换")
             return

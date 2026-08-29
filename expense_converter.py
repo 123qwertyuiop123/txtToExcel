@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
+from excel_utils import save_workbook_safely, set_safe_text
 from models import DayRecord, MoneyItem
 from money_utils import decimal_to_number, decimal_to_text, round_one_decimal
 
@@ -285,7 +286,8 @@ def create_workbook(
         for day in range(1, days_in_month + 1):
             record = records.get(day, DayRecord(day, ""))
             sheet.cell(day, 1, f"{day}日:")
-            sheet.cell(day, 2, expense_detail(record) or None)
+            # 外部文字统一强制写成字符串，避免以公式前缀开头时被 Excel 执行。
+            set_safe_text(sheet.cell(day, 2), expense_detail(record) or None)
             if record.expense:
                 sheet.cell(day, 3, decimal_to_number(round_one_decimal(record.expense)))
             for item in record.items:
@@ -298,7 +300,10 @@ def create_workbook(
         income_row = days_in_month + 2
         sheet.cell(expense_row, 2, "总计")
         sheet.cell(expense_row, 3, f"=ROUND(SUM(C1:C{days_in_month}),1)")
-        sheet.cell(income_row, 2, "，".join(income_parts) if income_parts else "收入总计")
+        set_safe_text(
+            sheet.cell(income_row, 2),
+            "，".join(income_parts) if income_parts else "收入总计",
+        )
         sheet.cell(income_row, 3, "=" + "+".join(income_values) if income_values else "=0")
         total_rows[month_number] = (expense_row, income_row)
         sheet.column_dimensions["A"].width = 10
@@ -331,8 +336,8 @@ def create_workbook(
         summary.column_dimensions[column].width = width
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+    # 先完整写入同目录临时文件，再替换目标，避免中断时损坏旧工作簿。
+    save_workbook_safely(workbook, output_path)
 
 
 def convert(input_path: Path, output_path: Path | None, year: int | None, month: int | None) -> Path:
