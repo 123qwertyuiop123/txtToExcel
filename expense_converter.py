@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
+from category_rules import categorize_expense
 from excel_utils import save_workbook_safely, set_safe_text
 from models import DayRecord, MoneyItem
 from money_utils import decimal_to_number, decimal_to_text, round_one_decimal
@@ -259,6 +260,149 @@ def expense_detail(record: DayRecord) -> str:
     )
 
 
+def _aggregate_categories(
+    month_records: dict[int, dict[int, DayRecord]],
+) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
+    """分别汇总全年支出原因和收入来源。"""
+    expenses: dict[str, Decimal] = {}
+    incomes: dict[str, Decimal] = {}
+    for records in month_records.values():
+        for record in records.values():
+            for item in record.items:
+                # 收入来源保持原名；支出只对命中明确规则的原因进行合并。
+                label = item.label if item.is_income else categorize_expense(item.label)
+                target = incomes if item.is_income else expenses
+                target[label] = target.get(label, Decimal("0")) + abs(item.amount)
+    return expenses, incomes
+
+
+def _create_category_sheet(
+    workbook,
+    month_records: dict[int, dict[int, DayRecord]],
+    year: int,
+) -> None:
+    """新增支出和收入分类表，并为两类数据分别创建占比饼图。"""
+    from openpyxl.chart import BarChart, PieChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    expenses, incomes = _aggregate_categories(month_records)
+    sheet = workbook.create_sheet("分类统计")
+    sheet.sheet_view.showGridLines = True
+    sheet.freeze_panes = "A3"
+
+    expense_fill = PatternFill("solid", fgColor="FCE4D6")
+    income_fill = PatternFill("solid", fgColor="E2F0D9")
+
+    def add_section(
+        start_row: int,
+        title: str,
+        values: dict[str, Decimal],
+        fill: PatternFill,
+    ) -> int:
+        """写入一个分类表并返回总计所在行。"""
+        sheet.cell(start_row, 1, f"{year}年{title}")
+        sheet.cell(start_row, 1).font = Font(bold=True, size=12)
+        sheet.cell(start_row, 1).fill = fill
+        sheet.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=3)
+        header_row = start_row + 1
+        for column, text in enumerate(("分类", "金额", "占比"), start=1):
+            cell = sheet.cell(header_row, column, text)
+            cell.font = Font(bold=True)
+            cell.fill = fill
+            cell.alignment = Alignment(horizontal="center")
+
+        # 金额从大到小排列，让表格和图例优先展示主要原因。
+        sorted_values = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+        first_data_row = header_row + 1
+        for row, (label, amount) in enumerate(sorted_values, start=first_data_row):
+            set_safe_text(sheet.cell(row, 1), label)
+            sheet.cell(row, 2, decimal_to_number(round_one_decimal(amount)))
+
+        total_row = first_data_row + len(sorted_values)
+        if sorted_values:
+            sheet.cell(total_row, 1, "总计")
+            sheet.cell(total_row, 2, f"=ROUND(SUM(B{first_data_row}:B{total_row - 1}),1)")
+            for row in range(first_data_row, total_row):
+                sheet.cell(row, 3, f"=IFERROR(B{row}/$B${total_row},0)")
+                sheet.cell(row, 3).number_format = "0.0%"
+        else:
+            sheet.cell(total_row, 1, "无数据")
+            sheet.cell(total_row, 2, 0)
+        sheet.cell(total_row, 1).font = Font(bold=True)
+        sheet.cell(total_row, 2).font = Font(bold=True)
+        return total_row
+
+    def add_share_chart(
+        start_row: int,
+        total_row: int,
+        title: str,
+        anchor: str,
+    ) -> None:
+        """分类少时用饼图，分类多时用横向条形图保证标签可读。"""
+        first_data_row = start_row + 2
+        if total_row <= first_data_row:
+            sheet[anchor] = "本年度无可绘制数据"
+            return
+        category_count = total_row - first_data_row
+        if category_count <= 8:
+            chart = PieChart()
+            value_column = 2
+            chart.legend.position = "r"
+            chart.dataLabels = DataLabelList()
+            chart.dataLabels.showPercent = True
+            chart.dataLabels.showLeaderLines = True
+        else:
+            # 条形图直接使用占比列，分类名称较多时比细碎饼图更容易比较。
+            chart = BarChart()
+            chart.type = "bar"
+            chart.style = 10
+            chart.legend = None
+            chart.height = min(14, max(9, category_count * 0.45 + 3))
+            chart.x_axis.title = "金额"
+            chart.x_axis.numFmt = "#,##0.0"
+            chart.x_axis.scaling.min = 0
+            chart.dataLabels = DataLabelList()
+            chart.dataLabels.showVal = True
+            chart.dataLabels.numFmt = "#,##0.0"
+            value_column = 2
+        chart.title = title
+        if category_count <= 8:
+            chart.height = 8
+        chart.width = 13
+        chart.add_data(
+            Reference(
+                sheet,
+                min_col=value_column,
+                min_row=start_row + 1,
+                max_row=total_row - 1,
+            ),
+            titles_from_data=True,
+        )
+        chart.set_categories(
+            Reference(sheet, min_col=1, min_row=first_data_row, max_row=total_row - 1)
+        )
+        sheet.add_chart(chart, anchor)
+
+    expense_total_row = add_section(1, "支出原因占比", expenses, expense_fill)
+    add_share_chart(1, expense_total_row, f"{year}年支出原因占比", "E2")
+
+    # 多分类条形图需要更多纵向空间；第二部分始终排在第一张图和表格之后。
+    chart_reserved_row = 31 if len(expenses) > 8 else 21
+    income_start_row = max(chart_reserved_row, expense_total_row + 3)
+    income_total_row = add_section(income_start_row, "收入来源占比", incomes, income_fill)
+    add_share_chart(
+        income_start_row,
+        income_total_row,
+        f"{year}年收入来源占比",
+        f"E{income_start_row + 1}",
+    )
+
+    sheet.column_dimensions["A"].width = 24
+    sheet.column_dimensions["B"].width = 16
+    sheet.column_dimensions["C"].width = 14
+
+
 # ---------- Excel 生成 ----------
 
 def create_workbook(
@@ -334,6 +478,8 @@ def create_workbook(
         cell.font = Font(bold=True)
     for column, width in {"A": 14, "B": 18, "C": 18, "D": 24}.items():
         summary.column_dimensions[column].width = width
+    # 新增独立统计页，不修改现有月份页和总计页的布局或样式。
+    _create_category_sheet(workbook, month_records, year)
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
     # 先完整写入同目录临时文件，再替换目标，避免中断时损坏旧工作簿。
