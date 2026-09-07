@@ -81,7 +81,7 @@ class CategoryChartTests(unittest.TestCase):
             finally:
                 workbook.close()
 
-    def test_chart_labels_only_show_requested_number_or_percent(self):
+    def test_chart_labels_keep_category_but_hide_amount_series_name(self):
         records = {
             4: {
                 1: DayRecord(
@@ -101,7 +101,7 @@ class CategoryChartTests(unittest.TestCase):
                 expense_labels = monthly._charts[0].dataLabels
                 self.assertTrue(expense_labels.showVal)
                 self.assertFalse(expense_labels.showLegendKey)
-                self.assertFalse(expense_labels.showCatName)
+                self.assertTrue(expense_labels.showCatName)
                 self.assertFalse(expense_labels.showSerName)
                 self.assertFalse(expense_labels.showPercent)
 
@@ -109,7 +109,7 @@ class CategoryChartTests(unittest.TestCase):
                 self.assertTrue(income_labels.showPercent)
                 self.assertFalse(income_labels.showVal)
                 self.assertFalse(income_labels.showLegendKey)
-                self.assertFalse(income_labels.showCatName)
+                self.assertTrue(income_labels.showCatName)
                 self.assertFalse(income_labels.showSerName)
             finally:
                 workbook.close()

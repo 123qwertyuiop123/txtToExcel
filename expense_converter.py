@@ -352,7 +352,7 @@ def _create_category_sheet(
             chart.dataLabels = DataLabelList()
             chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = False
-            chart.dataLabels.showCatName = False
+            chart.dataLabels.showCatName = True
             chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = True
             chart.dataLabels.showBubbleSize = False
@@ -370,7 +370,7 @@ def _create_category_sheet(
             chart.dataLabels = DataLabelList()
             chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = True
-            chart.dataLabels.showCatName = False
+            chart.dataLabels.showCatName = True
             chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = False
             chart.dataLabels.showBubbleSize = False
@@ -477,7 +477,7 @@ def _add_monthly_category_charts(
             chart.dataLabels = DataLabelList()
             chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = False
-            chart.dataLabels.showCatName = False
+            chart.dataLabels.showCatName = True
             chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = True
             chart.dataLabels.showBubbleSize = False
@@ -495,7 +495,7 @@ def _add_monthly_category_charts(
             chart.dataLabels = DataLabelList()
             chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = True
-            chart.dataLabels.showCatName = False
+            chart.dataLabels.showCatName = True
             chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = False
             chart.dataLabels.showBubbleSize = False
