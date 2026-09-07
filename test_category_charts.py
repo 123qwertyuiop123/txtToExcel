@@ -81,6 +81,39 @@ class CategoryChartTests(unittest.TestCase):
             finally:
                 workbook.close()
 
+    def test_chart_labels_only_show_requested_number_or_percent(self):
+        records = {
+            4: {
+                1: DayRecord(
+                    1,
+                    "",
+                    [MoneyItem(f"项目{index}", Decimal(str(index)), False) for index in range(1, 10)]
+                    + [MoneyItem("工资", Decimal("100"), True)],
+                )
+            }
+        }
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "result.xlsx"
+            create_workbook(records, 2026, output)
+            workbook = load_workbook(output, data_only=False)
+            try:
+                monthly = workbook["4月"]
+                expense_labels = monthly._charts[0].dataLabels
+                self.assertTrue(expense_labels.showVal)
+                self.assertFalse(expense_labels.showLegendKey)
+                self.assertFalse(expense_labels.showCatName)
+                self.assertFalse(expense_labels.showSerName)
+                self.assertFalse(expense_labels.showPercent)
+
+                income_labels = monthly._charts[1].dataLabels
+                self.assertTrue(income_labels.showPercent)
+                self.assertFalse(income_labels.showVal)
+                self.assertFalse(income_labels.showLegendKey)
+                self.assertFalse(income_labels.showCatName)
+                self.assertFalse(income_labels.showSerName)
+            finally:
+                workbook.close()
+
 
 if __name__ == "__main__":
     unittest.main()

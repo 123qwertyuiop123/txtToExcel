@@ -350,7 +350,12 @@ def _create_category_sheet(
             value_column = 2
             chart.legend.position = "r"
             chart.dataLabels = DataLabelList()
+            chart.dataLabels.showLegendKey = False
+            chart.dataLabels.showVal = False
+            chart.dataLabels.showCatName = False
+            chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = True
+            chart.dataLabels.showBubbleSize = False
             chart.dataLabels.showLeaderLines = True
         else:
             # 条形图直接使用占比列，分类名称较多时比细碎饼图更容易比较。
@@ -363,7 +368,13 @@ def _create_category_sheet(
             chart.x_axis.numFmt = "#,##0.0"
             chart.x_axis.scaling.min = 0
             chart.dataLabels = DataLabelList()
+            chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = True
+            chart.dataLabels.showCatName = False
+            chart.dataLabels.showSerName = False
+            chart.dataLabels.showPercent = False
+            chart.dataLabels.showBubbleSize = False
+            chart.dataLabels.showLeaderLines = False
             chart.dataLabels.numFmt = "#,##0.0"
             value_column = 2
         chart.title = title
@@ -464,7 +475,12 @@ def _add_monthly_category_charts(
             chart = PieChart()
             chart.legend.position = "r"
             chart.dataLabels = DataLabelList()
+            chart.dataLabels.showLegendKey = False
+            chart.dataLabels.showVal = False
+            chart.dataLabels.showCatName = False
+            chart.dataLabels.showSerName = False
             chart.dataLabels.showPercent = True
+            chart.dataLabels.showBubbleSize = False
             chart.dataLabels.showLeaderLines = True
             chart.height = 7
         else:
@@ -477,7 +493,13 @@ def _add_monthly_category_charts(
             chart.x_axis.numFmt = "#,##0.0"
             chart.x_axis.scaling.min = 0
             chart.dataLabels = DataLabelList()
+            chart.dataLabels.showLegendKey = False
             chart.dataLabels.showVal = True
+            chart.dataLabels.showCatName = False
+            chart.dataLabels.showSerName = False
+            chart.dataLabels.showPercent = False
+            chart.dataLabels.showBubbleSize = False
+            chart.dataLabels.showLeaderLines = False
             chart.dataLabels.numFmt = "#,##0.0"
         chart.title = title
         chart.width = 12
