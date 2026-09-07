@@ -403,6 +403,105 @@ def _create_category_sheet(
     sheet.column_dimensions["C"].width = 14
 
 
+def _add_monthly_category_charts(
+    sheet,
+    records: dict[int, DayRecord],
+    year: int,
+    month: int,
+) -> None:
+    """在月份页右侧增加支出、收入分类表和对应图表。
+
+    月份页左侧的 A:C 明细保持原样；统计数据放在 E:G，图表放在 I 列，
+    避免覆盖原有明细。分类规则与年度“分类统计”页共用，保证口径一致。
+    """
+    from openpyxl.chart import BarChart, PieChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    expenses, incomes = _aggregate_categories({month: records})
+    expense_fill = PatternFill("solid", fgColor="FCE4D6")
+    income_fill = PatternFill("solid", fgColor="E2F0D9")
+
+    def add_section(start_row: int, title: str, values: dict[str, Decimal], fill: PatternFill) -> int:
+        """在月份页右侧写入分类金额与占比公式，返回总计行。"""
+        sheet.cell(start_row, 5, f"{month}月{title}")
+        sheet.cell(start_row, 5).font = Font(bold=True, size=11)
+        sheet.cell(start_row, 5).fill = fill
+        sheet.merge_cells(start_row=start_row, start_column=5, end_row=start_row, end_column=7)
+        header_row = start_row + 1
+        for column, text in enumerate(("分类", "金额", "占比"), start=5):
+            cell = sheet.cell(header_row, column, text)
+            cell.font = Font(bold=True)
+            cell.fill = fill
+            cell.alignment = Alignment(horizontal="center")
+        sorted_values = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+        first_data_row = header_row + 1
+        for row, (label, amount) in enumerate(sorted_values, start=first_data_row):
+            set_safe_text(sheet.cell(row, 5), label)
+            sheet.cell(row, 6, decimal_to_number(round_one_decimal(amount)))
+        total_row = first_data_row + len(sorted_values)
+        if sorted_values:
+            sheet.cell(total_row, 5, "总计")
+            sheet.cell(total_row, 6, f"=ROUND(SUM(F{first_data_row}:F{total_row - 1}),1)")
+            for row in range(first_data_row, total_row):
+                sheet.cell(row, 7, f"=IFERROR(F{row}/$F${total_row},0)")
+                sheet.cell(row, 7).number_format = "0.0%"
+        else:
+            sheet.cell(total_row, 5, "无数据")
+            sheet.cell(total_row, 6, 0)
+        sheet.cell(total_row, 5).font = Font(bold=True)
+        sheet.cell(total_row, 6).font = Font(bold=True)
+        return total_row
+
+    def add_chart(start_row: int, total_row: int, title: str, anchor: str) -> None:
+        """分类较少用饼图，分类较多用横向条形图，避免月份图表拥挤。"""
+        first_data_row = start_row + 2
+        if total_row <= first_data_row:
+            sheet[anchor] = "无可绘制数据"
+            return
+        category_count = total_row - first_data_row
+        if category_count <= 8:
+            chart = PieChart()
+            chart.legend.position = "r"
+            chart.dataLabels = DataLabelList()
+            chart.dataLabels.showPercent = True
+            chart.dataLabels.showLeaderLines = True
+            chart.height = 7
+        else:
+            chart = BarChart()
+            chart.type = "bar"
+            chart.style = 10
+            chart.legend = None
+            chart.height = min(12, max(8, category_count * 0.45 + 2))
+            chart.x_axis.title = "金额"
+            chart.x_axis.numFmt = "#,##0.0"
+            chart.x_axis.scaling.min = 0
+            chart.dataLabels = DataLabelList()
+            chart.dataLabels.showVal = True
+            chart.dataLabels.numFmt = "#,##0.0"
+        chart.title = title
+        chart.width = 12
+        chart.add_data(
+            Reference(sheet, min_col=6, min_row=start_row + 1, max_row=total_row - 1),
+            titles_from_data=True,
+        )
+        chart.set_categories(Reference(sheet, min_col=5, min_row=first_data_row, max_row=total_row - 1))
+        sheet.add_chart(chart, anchor)
+
+    expense_total_row = add_section(1, "支出占比", expenses, expense_fill)
+    add_chart(1, expense_total_row, f"{year}年{month}月支出占比", "I2")
+    income_start_row = max(20, expense_total_row + 3)
+    income_total_row = add_section(income_start_row, "收入占比", incomes, income_fill)
+    add_chart(
+        income_start_row,
+        income_total_row,
+        f"{year}年{month}月收入占比",
+        f"I{income_start_row + 1}",
+    )
+    for column, width in {"E": 18, "F": 14, "G": 12}.items():
+        sheet.column_dimensions[column].width = width
+
+
 # ---------- Excel 生成 ----------
 
 def create_workbook(
@@ -457,6 +556,7 @@ def create_workbook(
             for cell in row:
                 cell.alignment = Alignment(vertical="center")
         sheet.cell(expense_row, 3).font = Font(bold=True)
+        _add_monthly_category_charts(sheet, records, year, month_number)
 
     summary = workbook.create_sheet("总计")
     summary.append(["月份", "支出", "收入", "结余（收入-支出）"])

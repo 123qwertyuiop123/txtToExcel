@@ -54,6 +54,15 @@ class CategoryChartTests(unittest.TestCase):
                 self.assertEqual(sheet["A21"].value, "2025年收入来源占比")
                 self.assertEqual(sheet["A23"].value, "工资")
                 self.assertEqual(sheet["B23"].value, 100)
+
+                monthly = workbook["1月"]
+                self.assertEqual(len(monthly._charts), 2)
+                self.assertEqual(monthly["E1"].value, "1月支出占比")
+                self.assertEqual(monthly["E3"].value, "交通")
+                self.assertEqual(monthly["F3"].value, 20)
+                self.assertEqual(monthly["E20"].value, "1月收入占比")
+                self.assertEqual(monthly["E22"].value, "工资")
+                self.assertEqual(monthly["F22"].value, 100)
             finally:
                 workbook.close()
 
