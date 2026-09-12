@@ -195,7 +195,14 @@ def launch_game_gui(parent) -> None:
         if not selected_files:
             messagebox.showwarning("缺少文件", "请先选择年度游戏消费 TXT。", parent=window)
             return
-        errors = validate_game_txt_files(selected_files)
+        try:
+            before = _file_snapshot(selected_files)
+            errors = validate_game_txt_files(selected_files)
+            after = _file_snapshot(selected_files)
+            if before != after:
+                errors.append("检查期间源文件发生变化，请重新检查。")
+        except OSError as exc:
+            errors = [str(exc)]
         if errors:
             validated_snapshot = None
             convert_button.state(["disabled"])
@@ -207,7 +214,7 @@ def launch_game_gui(parent) -> None:
                 errors,
             )
             return
-        validated_snapshot = _file_snapshot(selected_files)
+        validated_snapshot = after
         convert_button.state(["!disabled"])
         status_var.set(f"检查通过：{len(selected_files)} 个文件可以转换")
         messagebox.showinfo("检查通过", "所有游戏消费文件均符合转换标准。", parent=window)
@@ -364,7 +371,11 @@ def launch_gui() -> int:
             return
         try:
             year, month = read_year_month()
+            before = current_snapshot()
             errors = validate_many(selected_files, year, month if len(selected_files) == 1 else None)
+            after = current_snapshot()
+            if before != after:
+                errors.append("检查期间源文件发生变化，请重新检查。")
         except (OSError, ValueError) as exc:
             errors = [str(exc)]
         if errors:
@@ -373,7 +384,7 @@ def launch_gui() -> int:
             status_var.set(f"检查未通过：发现 {len(errors)} 个问题")
             _show_error_list(root, "文件检查未通过", f"发现 {len(errors)} 个问题，请修改 TXT 后重新检查：", errors)
             return
-        validated_snapshot = current_snapshot()
+        validated_snapshot = after
         convert_button.state(["!disabled"])
         status_var.set(f"检查通过：{len(selected_files)} 个文件可以转换")
         messagebox.showinfo("检查通过", "所有文件均符合转换标准，现在可以开始转换。", parent=root)

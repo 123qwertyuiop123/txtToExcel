@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from category_rules import categorize_expense
-from excel_utils import save_workbook_safely, set_safe_text
+from excel_utils import save_workbook_safely, set_safe_text, validate_output_path
 from models import DayRecord, MoneyItem
 from money_utils import decimal_to_number, decimal_to_text, round_one_decimal
 
@@ -102,6 +102,8 @@ def parse_txt(path: Path) -> dict[int, DayRecord]:
         if not match:
             raise ValueError(f"{path.name} 第 {line_number} 行格式无法识别：{raw_line}")
         day = int(match.group("day"))
+        if not 1 <= day <= 31:
+            raise ValueError(f"文件：{path.name}\n第 {line_number} 行\n日期必须为 1–31 日：{day}日")
         detail = match.group("detail").strip()
         if day in records:
             raise ValueError(f"{path.name} 中第 {day} 日重复出现")
@@ -124,12 +126,16 @@ def infer_year_month(path: Path, year: int | None, month: int | None) -> tuple[i
         raise ValueError(f"无法从文件名“{path.name}”识别年月，请使用 --year 和 --month 指定")
     if not 1 <= final_month <= 12:
         raise ValueError(f"月份必须为 1 到 12，实际为 {final_month}")
+    if not 1 <= final_year <= 9999:
+        raise ValueError(f"年份必须为 1 到 9999，实际为 {final_year}")
     return final_year, final_month
 
 
 def find_txt_files(input_path: Path) -> list[Path]:
     """把单个文件或目录统一展开为 TXT 文件列表。"""
     if input_path.is_file():
+        if input_path.suffix.lower() != ".txt":
+            raise ValueError(f"请选择 .txt 文件：{input_path.name}")
         return [input_path]
     if input_path.is_dir():
         files = sorted(input_path.glob("*.txt"))
@@ -201,7 +207,7 @@ def validate_many(input_paths: Iterable[Path], year: int | None, month: int | No
     for input_path in input_paths:
         try:
             discovered = find_txt_files(input_path)
-        except (OSError, FileNotFoundError) as exc:
+        except (OSError, ValueError) as exc:
             errors.append(str(exc))
             continue
         for file in discovered:
@@ -276,249 +282,48 @@ def _aggregate_categories(
     return expenses, incomes
 
 
-def _create_category_sheet(
-    workbook,
-    month_records: dict[int, dict[int, DayRecord]],
-    year: int,
-) -> None:
-    """新增支出和收入分类表，并为两类数据分别创建占比饼图。"""
-    from openpyxl.chart import BarChart, PieChart, Reference
-    from openpyxl.chart.label import DataLabelList
-    from openpyxl.styles import Alignment, Font, PatternFill
+def _create_category_sheet(workbook, month_records: dict[int, dict[int, DayRecord]], year: int) -> None:
+    """年度分类页只定义布局，表格与图表生成交给共用模块。"""
+    from category_charts import (
+        ANNUAL_LAYOUT, EXPENSE_COLOR, INCOME_COLOR, PIE_CATEGORY_LIMIT, add_category_section,
+    )
 
     expenses, incomes = _aggregate_categories(month_records)
     sheet = workbook.create_sheet("分类统计")
     sheet.sheet_view.showGridLines = True
     sheet.freeze_panes = "A3"
+    total_row = add_category_section(
+        sheet, expenses, start_row=1, table_title=f"{year}年支出原因占比",
+        chart_title=f"{year}年支出原因占比", chart_anchor="E2",
+        color=EXPENSE_COLOR, layout=ANNUAL_LAYOUT, empty_message="本年度无可绘制数据",
+    )
+    income_row = max(31 if len(expenses) > PIE_CATEGORY_LIMIT else 21, total_row + 3)
+    add_category_section(
+        sheet, incomes, start_row=income_row, table_title=f"{year}年收入来源占比",
+        chart_title=f"{year}年收入来源占比", chart_anchor=f"E{income_row + 1}",
+        color=INCOME_COLOR, layout=ANNUAL_LAYOUT, empty_message="本年度无可绘制数据",
+    )
+    for column, width in {"A": 24, "B": 16, "C": 14}.items():
+        sheet.column_dimensions[column].width = width
 
-    expense_fill = PatternFill("solid", fgColor="FCE4D6")
-    income_fill = PatternFill("solid", fgColor="E2F0D9")
 
-    def add_section(
-        start_row: int,
-        title: str,
-        values: dict[str, Decimal],
-        fill: PatternFill,
-    ) -> int:
-        """写入一个分类表并返回总计所在行。"""
-        sheet.cell(start_row, 1, f"{year}年{title}")
-        sheet.cell(start_row, 1).font = Font(bold=True, size=12)
-        sheet.cell(start_row, 1).fill = fill
-        sheet.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=3)
-        header_row = start_row + 1
-        for column, text in enumerate(("分类", "金额", "占比"), start=1):
-            cell = sheet.cell(header_row, column, text)
-            cell.font = Font(bold=True)
-            cell.fill = fill
-            cell.alignment = Alignment(horizontal="center")
-
-        # 金额从大到小排列，让表格和图例优先展示主要原因。
-        sorted_values = sorted(values.items(), key=lambda item: (-item[1], item[0]))
-        first_data_row = header_row + 1
-        for row, (label, amount) in enumerate(sorted_values, start=first_data_row):
-            set_safe_text(sheet.cell(row, 1), label)
-            sheet.cell(row, 2, decimal_to_number(round_one_decimal(amount)))
-
-        total_row = first_data_row + len(sorted_values)
-        if sorted_values:
-            sheet.cell(total_row, 1, "总计")
-            sheet.cell(total_row, 2, f"=ROUND(SUM(B{first_data_row}:B{total_row - 1}),1)")
-            for row in range(first_data_row, total_row):
-                sheet.cell(row, 3, f"=IFERROR(B{row}/$B${total_row},0)")
-                sheet.cell(row, 3).number_format = "0.0%"
-        else:
-            sheet.cell(total_row, 1, "无数据")
-            sheet.cell(total_row, 2, 0)
-        sheet.cell(total_row, 1).font = Font(bold=True)
-        sheet.cell(total_row, 2).font = Font(bold=True)
-        return total_row
-
-    def add_share_chart(
-        start_row: int,
-        total_row: int,
-        title: str,
-        anchor: str,
-    ) -> None:
-        """分类少时用饼图，分类多时用横向条形图保证标签可读。"""
-        first_data_row = start_row + 2
-        if total_row <= first_data_row:
-            sheet[anchor] = "本年度无可绘制数据"
-            return
-        category_count = total_row - first_data_row
-        if category_count <= 8:
-            chart = PieChart()
-            value_column = 2
-            chart.legend.position = "r"
-            chart.dataLabels = DataLabelList()
-            chart.dataLabels.showLegendKey = False
-            chart.dataLabels.showVal = False
-            chart.dataLabels.showCatName = True
-            chart.dataLabels.showSerName = False
-            chart.dataLabels.showPercent = True
-            chart.dataLabels.showBubbleSize = False
-            chart.dataLabels.showLeaderLines = True
-        else:
-            # 条形图直接使用占比列，分类名称较多时比细碎饼图更容易比较。
-            chart = BarChart()
-            chart.type = "bar"
-            chart.style = 10
-            chart.legend = None
-            chart.height = min(14, max(9, category_count * 0.45 + 3))
-            chart.x_axis.title = "金额"
-            chart.x_axis.numFmt = "#,##0.0"
-            chart.x_axis.scaling.min = 0
-            chart.dataLabels = DataLabelList()
-            chart.dataLabels.showLegendKey = False
-            chart.dataLabels.showVal = True
-            chart.dataLabels.showCatName = True
-            chart.dataLabels.showSerName = False
-            chart.dataLabels.showPercent = False
-            chart.dataLabels.showBubbleSize = False
-            chart.dataLabels.showLeaderLines = False
-            chart.dataLabels.numFmt = "#,##0.0"
-            value_column = 2
-        chart.title = title
-        if category_count <= 8:
-            chart.height = 8
-        chart.width = 13
-        chart.add_data(
-            Reference(
-                sheet,
-                min_col=value_column,
-                min_row=start_row + 1,
-                max_row=total_row - 1,
-            ),
-            titles_from_data=True,
-        )
-        chart.set_categories(
-            Reference(sheet, min_col=1, min_row=first_data_row, max_row=total_row - 1)
-        )
-        sheet.add_chart(chart, anchor)
-
-    expense_total_row = add_section(1, "支出原因占比", expenses, expense_fill)
-    add_share_chart(1, expense_total_row, f"{year}年支出原因占比", "E2")
-
-    # 多分类条形图需要更多纵向空间；第二部分始终排在第一张图和表格之后。
-    chart_reserved_row = 31 if len(expenses) > 8 else 21
-    income_start_row = max(chart_reserved_row, expense_total_row + 3)
-    income_total_row = add_section(income_start_row, "收入来源占比", incomes, income_fill)
-    add_share_chart(
-        income_start_row,
-        income_total_row,
-        f"{year}年收入来源占比",
-        f"E{income_start_row + 1}",
+def _add_monthly_category_charts(sheet, records: dict[int, DayRecord], year: int, month: int) -> None:
+    """只在月份页右侧增加统计内容，保持 A:C 明细与原有样式不变。"""
+    from category_charts import (
+        EXPENSE_COLOR, INCOME_COLOR, MONTHLY_LAYOUT, add_category_section, next_chart_row,
     )
 
-    sheet.column_dimensions["A"].width = 24
-    sheet.column_dimensions["B"].width = 16
-    sheet.column_dimensions["C"].width = 14
-
-
-def _add_monthly_category_charts(
-    sheet,
-    records: dict[int, DayRecord],
-    year: int,
-    month: int,
-) -> None:
-    """在月份页右侧增加支出、收入分类表和对应图表。
-
-    月份页左侧的 A:C 明细保持原样；统计数据放在 E:G，图表放在 I 列，
-    避免覆盖原有明细。分类规则与年度“分类统计”页共用，保证口径一致。
-    """
-    from openpyxl.chart import BarChart, PieChart, Reference
-    from openpyxl.chart.label import DataLabelList
-    from openpyxl.styles import Alignment, Font, PatternFill
-
     expenses, incomes = _aggregate_categories({month: records})
-    expense_fill = PatternFill("solid", fgColor="FCE4D6")
-    income_fill = PatternFill("solid", fgColor="E2F0D9")
-
-    def add_section(start_row: int, title: str, values: dict[str, Decimal], fill: PatternFill) -> int:
-        """在月份页右侧写入分类金额与占比公式，返回总计行。"""
-        sheet.cell(start_row, 5, f"{month}月{title}")
-        sheet.cell(start_row, 5).font = Font(bold=True, size=11)
-        sheet.cell(start_row, 5).fill = fill
-        sheet.merge_cells(start_row=start_row, start_column=5, end_row=start_row, end_column=7)
-        header_row = start_row + 1
-        for column, text in enumerate(("分类", "金额", "占比"), start=5):
-            cell = sheet.cell(header_row, column, text)
-            cell.font = Font(bold=True)
-            cell.fill = fill
-            cell.alignment = Alignment(horizontal="center")
-        sorted_values = sorted(values.items(), key=lambda item: (-item[1], item[0]))
-        first_data_row = header_row + 1
-        for row, (label, amount) in enumerate(sorted_values, start=first_data_row):
-            set_safe_text(sheet.cell(row, 5), label)
-            sheet.cell(row, 6, decimal_to_number(round_one_decimal(amount)))
-        total_row = first_data_row + len(sorted_values)
-        if sorted_values:
-            sheet.cell(total_row, 5, "总计")
-            sheet.cell(total_row, 6, f"=ROUND(SUM(F{first_data_row}:F{total_row - 1}),1)")
-            for row in range(first_data_row, total_row):
-                sheet.cell(row, 7, f"=IFERROR(F{row}/$F${total_row},0)")
-                sheet.cell(row, 7).number_format = "0.0%"
-        else:
-            sheet.cell(total_row, 5, "无数据")
-            sheet.cell(total_row, 6, 0)
-        sheet.cell(total_row, 5).font = Font(bold=True)
-        sheet.cell(total_row, 6).font = Font(bold=True)
-        return total_row
-
-    def add_chart(start_row: int, total_row: int, title: str, anchor: str) -> None:
-        """分类较少用饼图，分类较多用横向条形图，避免月份图表拥挤。"""
-        first_data_row = start_row + 2
-        if total_row <= first_data_row:
-            sheet[anchor] = "无可绘制数据"
-            return
-        category_count = total_row - first_data_row
-        if category_count <= 8:
-            chart = PieChart()
-            chart.legend.position = "r"
-            chart.dataLabels = DataLabelList()
-            chart.dataLabels.showLegendKey = False
-            chart.dataLabels.showVal = False
-            chart.dataLabels.showCatName = True
-            chart.dataLabels.showSerName = False
-            chart.dataLabels.showPercent = True
-            chart.dataLabels.showBubbleSize = False
-            chart.dataLabels.showLeaderLines = True
-            chart.height = 7
-        else:
-            chart = BarChart()
-            chart.type = "bar"
-            chart.style = 10
-            chart.legend = None
-            chart.height = min(12, max(8, category_count * 0.45 + 2))
-            chart.x_axis.title = "金额"
-            chart.x_axis.numFmt = "#,##0.0"
-            chart.x_axis.scaling.min = 0
-            chart.dataLabels = DataLabelList()
-            chart.dataLabels.showLegendKey = False
-            chart.dataLabels.showVal = True
-            chart.dataLabels.showCatName = True
-            chart.dataLabels.showSerName = False
-            chart.dataLabels.showPercent = False
-            chart.dataLabels.showBubbleSize = False
-            chart.dataLabels.showLeaderLines = False
-            chart.dataLabels.numFmt = "#,##0.0"
-        chart.title = title
-        chart.width = 12
-        chart.add_data(
-            Reference(sheet, min_col=6, min_row=start_row + 1, max_row=total_row - 1),
-            titles_from_data=True,
-        )
-        chart.set_categories(Reference(sheet, min_col=5, min_row=first_data_row, max_row=total_row - 1))
-        sheet.add_chart(chart, anchor)
-
-    expense_total_row = add_section(1, "支出占比", expenses, expense_fill)
-    add_chart(1, expense_total_row, f"{year}年{month}月支出占比", "I2")
-    income_start_row = max(20, expense_total_row + 3)
-    income_total_row = add_section(income_start_row, "收入占比", incomes, income_fill)
-    add_chart(
-        income_start_row,
-        income_total_row,
-        f"{year}年{month}月收入占比",
-        f"I{income_start_row + 1}",
+    total_row = add_category_section(
+        sheet, expenses, start_row=1, table_title=f"{month}月支出占比",
+        chart_title=f"{year}年{month}月支出占比", chart_anchor="I2",
+        color=EXPENSE_COLOR, layout=MONTHLY_LAYOUT,
+    )
+    income_row = max(20, total_row + 3, next_chart_row(sheet, 2, len(expenses), MONTHLY_LAYOUT))
+    add_category_section(
+        sheet, incomes, start_row=income_row, table_title=f"{month}月收入占比",
+        chart_title=f"{year}年{month}月收入占比", chart_anchor=f"I{income_row + 1}",
+        color=INCOME_COLOR, layout=MONTHLY_LAYOUT,
     )
     for column, width in {"E": 18, "F": 14, "G": 12}.items():
         sheet.column_dimensions[column].width = width
@@ -526,12 +331,27 @@ def _add_monthly_category_charts(
 
 # ---------- Excel 生成 ----------
 
+def _validate_month_records(records: dict[int, DayRecord], year: int, month: int) -> None:
+    """生成前验证完整日期；不能让循环月份天数时静默丢弃非法记录。"""
+    if not 1 <= year <= 9999 or not 1 <= month <= 12:
+        raise ValueError(f"年月无效：{year}年{month}月")
+    max_day = calendar.monthrange(year, month)[1]
+    for day, record in records.items():
+        if not 1 <= day <= max_day:
+            raise ValueError(f"日期超出 {year}年{month}月的有效范围（1–{max_day}日）：{day}日")
+        if record.day != day:
+            raise ValueError(f"日期键与记录不一致：{day}日 / {record.day}日")
+
+
 def create_workbook(
     month_records: dict[int, dict[int, DayRecord]],
     year: int,
     output_path: Path,
 ) -> None:
     """生成包含 12 个月份和年度总计的普通消费工作簿。"""
+    _validate_month_records({}, year, 1)
+    for month_number, records in month_records.items():
+        _validate_month_records(records, year, month_number)
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font
@@ -600,7 +420,7 @@ def create_workbook(
         cell.font = Font(bold=True)
     for column, width in {"A": 14, "B": 18, "C": 18, "D": 24}.items():
         summary.column_dimensions[column].width = width
-    # 新增独立统计页，不修改现有月份页和总计页的布局或样式。
+    # 年度分类另设统计页；月份页仅在右侧添加图表，总计页仍保持原布局。
     _create_category_sheet(workbook, month_records, year)
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
@@ -657,10 +477,15 @@ def convert_many(
         workbook_year = file_year
         if first_year_file is None:
             first_year_file = path
-        month_records[file_month] = parse_txt(path)
+        records = parse_txt(path)
+        try:
+            _validate_month_records(records, file_year, file_month)
+        except ValueError as exc:
+            raise ValueError(f"文件：{path.name}\n{exc}") from exc
+        month_records[file_month] = records
         month_sources[file_month] = path
 
     assert workbook_year is not None
-    target = output_path or files[0].parent / f"{workbook_year}年消费统计.xlsx"
+    target = validate_output_path(output_path or files[0].parent / f"{workbook_year}年消费统计.xlsx", files)
     create_workbook(month_records, workbook_year, target)
     return target

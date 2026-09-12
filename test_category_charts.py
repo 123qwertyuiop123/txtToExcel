@@ -97,20 +97,23 @@ class CategoryChartTests(unittest.TestCase):
             create_workbook(records, 2026, output)
             workbook = load_workbook(output, data_only=False)
             try:
-                monthly = workbook["4月"]
-                expense_labels = monthly._charts[0].dataLabels
-                self.assertTrue(expense_labels.showVal)
-                self.assertFalse(expense_labels.showLegendKey)
-                self.assertTrue(expense_labels.showCatName)
-                self.assertFalse(expense_labels.showSerName)
-                self.assertFalse(expense_labels.showPercent)
+                # 两种布局都必须保留分类，防止只验证月份页而漏掉年度页。
+                for sheet_name in ("4月", "分类统计"):
+                    with self.subTest(sheet=sheet_name):
+                        sheet = workbook[sheet_name]
+                        expense_labels = sheet._charts[0].dataLabels
+                        self.assertTrue(expense_labels.showVal)
+                        self.assertFalse(expense_labels.showLegendKey)
+                        self.assertTrue(expense_labels.showCatName)
+                        self.assertFalse(expense_labels.showSerName)
+                        self.assertFalse(expense_labels.showPercent)
 
-                income_labels = monthly._charts[1].dataLabels
-                self.assertTrue(income_labels.showPercent)
-                self.assertFalse(income_labels.showVal)
-                self.assertFalse(income_labels.showLegendKey)
-                self.assertTrue(income_labels.showCatName)
-                self.assertFalse(income_labels.showSerName)
+                        income_labels = sheet._charts[1].dataLabels
+                        self.assertTrue(income_labels.showPercent)
+                        self.assertFalse(income_labels.showVal)
+                        self.assertFalse(income_labels.showLegendKey)
+                        self.assertTrue(income_labels.showCatName)
+                        self.assertFalse(income_labels.showSerName)
             finally:
                 workbook.close()
 

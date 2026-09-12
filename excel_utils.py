@@ -3,10 +3,24 @@
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def validate_output_path(output_path: Path, sources: Iterable[Path] = ()) -> Path:
+    """限制输出扩展名，并阻止结果覆盖输入文件（包括符号链接和硬链接）。"""
+    output_path = Path(output_path)
+    if output_path.suffix.lower() != ".xlsx":
+        raise ValueError(f"输出文件必须使用 .xlsx 扩展名：{output_path}")
+    for source in sources:
+        source = Path(source)
+        same_path = output_path.resolve() == source.resolve()
+        same_file = output_path.exists() and source.exists() and os.path.samefile(output_path, source)
+        if same_path or same_file:
+            raise ValueError(f"输出文件不能覆盖输入文件：{source}")
+    return output_path
 
 
 def set_safe_text(cell: Any, value: str | None) -> None:
@@ -26,7 +40,7 @@ def save_workbook_safely(workbook: Any, output_path: Path) -> None:
     临时文件与目标位于同一磁盘，使 ``os.replace`` 可以原子替换。同名旧文件
     在新文件完全写好之前不会受到影响；保存或替换失败时会删除临时文件。
     """
-    output_path = Path(output_path)
+    output_path = validate_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output_path.stem}-",

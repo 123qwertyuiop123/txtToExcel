@@ -1,16 +1,18 @@
 """多个年度消费统计 Excel 的检查与合并。"""
 
 import re
+from collections import Counter
 from copy import copy
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
-from excel_utils import save_workbook_safely
+from excel_utils import save_workbook_safely, set_safe_text, validate_output_path
 from money_utils import decimal_to_number, round_one_decimal
 
 
 YEAR_WORKBOOK_RE = re.compile(r"(?P<year>\d{4})\s*年.*统计")
+LITERAL_SUM_RE = re.compile(r"[+-]?\d+(?:\.\d+)?(?:[+-]\d+(?:\.\d+)?)*")
 
 
 # ---------- 输入工作簿检查 ----------
@@ -21,6 +23,23 @@ def infer_year_from_workbook_name(path: Path) -> int:
     if match is None:
         raise ValueError(f"无法从文件名识别年份：{path.name}\n建议命名为：2025年消费统计.xlsx")
     return int(match.group("year"))
+
+
+def _summary_layout_errors(sheet, year: int) -> list[str]:
+    """确认总表月份完整且唯一，避免复制出缺月份、重复月份或错误年份。"""
+    labels = [str(row[0] or "") for row in sheet.iter_rows(min_col=1, max_col=1, values_only=True)]
+    months = Counter(int(match.group(1)) for label in labels if (match := re.fullmatch(r"(\d{1,2})月", label)))
+    errors = []
+    for month in range(1, 13):
+        if months[month] != 1:
+            errors.append(f"“总计”工作表的 {month}月必须恰好出现一次，实际为 {months[month]} 次")
+    for month in months:
+        if not 1 <= month <= 12:
+            errors.append(f"“总计”工作表月份无效：{month}月")
+    annual_labels = [label for label in labels if label.endswith("年总计")]
+    if annual_labels != [f"{year}年总计"]:
+        errors.append(f"“总计”工作表必须恰好包含一个 {year}年总计 行，且年份与文件名一致")
+    return errors
 
 
 def validate_yearly_workbooks(paths: Iterable[Path]) -> list[str]:
@@ -59,12 +78,14 @@ def validate_yearly_workbooks(paths: Iterable[Path]) -> list[str]:
             missing = [name for name in required if name not in workbook.sheetnames]
             if missing:
                 errors.append(f"文件：{path.name}\n缺少工作表：{'、'.join(missing)}")
-            elif not any(
-                isinstance(cell.value, str) and cell.value.endswith("年总计")
-                for row in workbook["总计"].iter_rows(min_col=1, max_col=1)
-                for cell in row
-            ):
-                errors.append(f"文件：{path.name}\n“总计”工作表中找不到年度总计行")
+            if not missing:
+                errors.extend(f"文件：{path.name}\n{error}" for error in _summary_layout_errors(workbook["总计"], year))
+                # 检查阶段也确认金额可以可靠提取，避免“检查通过”后才发现复杂公式。
+                for month in range(1, 13):
+                    try:
+                        _extract_month_totals(workbook, month)
+                    except ValueError as exc:
+                        errors.append(f"文件：{path.name}\n{exc}")
         finally:
             workbook.close()
     if not seen_years and not errors:
@@ -90,7 +111,13 @@ def _copy_worksheet(source, target, year: int) -> None:
     for row in source.iter_rows():
         for source_cell in row:
             target_cell = target[source_cell.coordinate]
-            target_cell.value = _rewrite_year_formula(source_cell.value, year)
+            # 值以“=”开头不等于公式；复制时必须保留来源单元格的文本类型。
+            if source_cell.data_type == "f":
+                target_cell.value = _rewrite_year_formula(source_cell.value, year)
+            elif isinstance(source_cell.value, str):
+                set_safe_text(target_cell, source_cell.value)
+            else:
+                target_cell.value = source_cell.value
             if source_cell.has_style:
                 target_cell.font = copy(source_cell.font)
                 target_cell.fill = copy(source_cell.fill)
@@ -119,40 +146,53 @@ def _copy_worksheet(source, target, year: int) -> None:
     target.sheet_format.defaultRowHeight = source.sheet_format.defaultRowHeight
 
 
+def _numeric_amount(value: object, location: str) -> Decimal:
+    """只接受有限数值；布尔值、错误值和待计算公式不能当作金额。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{location}不是可读取的金额：{value}")
+    amount = Decimal(str(value))
+    if not amount.is_finite():
+        raise ValueError(f"{location}金额不是有限数值")
+    return amount
+
+
 def _extract_month_totals(workbook, month: int) -> tuple[int | float, int | float, int | float]:
     """从月度明细重新计算支出和收入，避免依赖 Excel 公式缓存。"""
     sheet = workbook[f"{month}月"]
-    total_row: int | None = None
-    for row in range(1, sheet.max_row + 1):
-        if sheet.cell(row, 2).value in {"总计", "支出总计"}:
+    expense = Decimal("0")
+    # 流式扫描 B:C；read_only 模式下逐个调用 cell 会反复读取文件，成本很高。
+    rows = enumerate(sheet.iter_rows(min_col=2, max_col=3, values_only=True), start=1)
+    for row, (label, value) in rows:
+        if label in ("总计", "支出总计"):
             total_row = row
             break
-    if total_row is None:
+        if value is not None:
+            expense += _numeric_amount(value, f"{month}月!C{row}")
+    else:
         raise ValueError(f"工作表“{month}月”中找不到总计行")
-
-    expense = sum(
-        (
-            Decimal(str(sheet.cell(row, 3).value))
-            for row in range(1, total_row)
-            if isinstance(sheet.cell(row, 3).value, (int, float))
-        ),
-        Decimal("0"),
-    )
     income_row = total_row + 1
-    income_text = str(sheet.cell(income_row, 2).value or "")
-    income_values = [Decimal(value) for value in re.findall(r"\+(\d+(?:\.\d+)?)", income_text)]
+    _, (income_label, income_formula) = next(rows, (income_row, (None, None)))
+    income_text = str(income_label or "")
+    # 只从“项目:+金额”提取收入，名称中的“+数字”不是一笔收入。
+    income_values = [Decimal(value) for value in re.findall(r"[:：]\s*\+\s*(\d+(?:\.\d+)?)", income_text)]
     # 优先读取收入说明文字中的“+金额”；兼容旧工作簿时再尝试数值或公式。
     if income_values:
         income = sum(income_values, Decimal("0"))
     else:
-        income_formula = sheet.cell(income_row, 3).value
         if isinstance(income_formula, (int, float)):
-            income = Decimal(str(income_formula))
+            income = _numeric_amount(income_formula, f"{month}月!C{income_row}")
         elif isinstance(income_formula, str) and income_formula.startswith("="):
-            numbers = re.findall(r"[+-]?\d+(?:\.\d+)?", income_formula[1:].replace(" ", ""))
+            expression = income_formula[1:].replace(" ", "")
+            # 仅支持本程序写出的字面量加减式；不能从 SUM(C1:C3) 中提取 1 和 3。
+            # 不调用 eval，也不声称能够计算任意 Excel 公式。
+            if not LITERAL_SUM_RE.fullmatch(expression):
+                raise ValueError(f"{month}月!C{income_row}收入公式无法可靠计算：{income_formula}；请改为金额或补充收入明细")
+            numbers = re.findall(r"[+-]?\d+(?:\.\d+)?", expression)
             income = sum((Decimal(value) for value in numbers), Decimal("0"))
-        else:
+        elif income_formula is None:
             income = Decimal("0")
+        else:
+            raise ValueError(f"{month}月!C{income_row}收入金额无法识别：{income_formula}")
 
     expense = round_one_decimal(expense)
     income = round_one_decimal(income)
@@ -165,6 +205,7 @@ def _extract_month_totals(workbook, month: int) -> tuple[int | float, int | floa
 def merge_yearly_workbooks(paths: Iterable[Path], output_path: Path) -> Path:
     """只复制各年度总情况，并生成跨年份汇总。"""
     source_paths = list(paths)
+    output_path = validate_output_path(output_path, source_paths)
     errors = validate_yearly_workbooks(source_paths)
     if errors:
         raise ValueError("\n\n".join(errors))
@@ -188,7 +229,10 @@ def merge_yearly_workbooks(paths: Iterable[Path], output_path: Path) -> Path:
     for year, path in sources:
         source_book = load_workbook(path, data_only=False)
         try:
-            month_totals = {month: _extract_month_totals(source_book, month) for month in range(1, 13)}
+            try:
+                month_totals = {month: _extract_month_totals(source_book, month) for month in range(1, 13)}
+            except ValueError as exc:
+                raise ValueError(f"文件：{path.name}\n{exc}") from exc
             annual_expense = decimal_to_number(round_one_decimal(sum(
                 (Decimal(str(values[0])) for values in month_totals.values()), Decimal("0")
             )))

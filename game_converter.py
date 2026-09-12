@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
-from excel_utils import save_workbook_safely, set_safe_text
+from excel_utils import save_workbook_safely, set_safe_text, validate_output_path
 from models import GameRecord
 from money_utils import decimal_to_number, round_one_decimal
 
@@ -126,6 +126,8 @@ def validate_game_txt_files(paths: Iterable[Path]) -> list[str]:
 
 def create_game_workbook(records_by_year: dict[int, list[GameRecord]], output_path: Path) -> None:
     """生成总览，以及每年的逐笔、月度和游戏分类数据。"""
+    if not records_by_year or any(not records for records in records_by_year.values()):
+        raise ValueError("每个年份必须包含游戏消费记录")
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -205,6 +207,7 @@ def create_game_workbook(records_by_year: dict[int, list[GameRecord]], output_pa
 def convert_game_txt_files(paths: Iterable[Path], output_path: Path) -> Path:
     """检查并转换多个年度游戏 TXT；任何文件失败时都不生成结果。"""
     selected = list(paths)
+    output_path = validate_output_path(output_path, selected)
     errors = validate_game_txt_files(selected)
     if errors:
         raise ValueError("游戏消费 TXT 检查未通过：\n\n" + "\n\n".join(errors))
